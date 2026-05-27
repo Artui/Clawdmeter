@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "splash.h"
+#include "buddy.h"
 #include <lvgl.h>
 #include "logo.h"
 #include "icons.h"
@@ -432,9 +433,13 @@ void ui_init(void) {
     init_usage_screen(scr);
     init_bluetooth_screen(scr);
     splash_init(scr);
+    buddy_init(scr);
 
     if (splash_get_root()) {
         lv_obj_add_event_cb(splash_get_root(), global_click_cb, LV_EVENT_CLICKED, NULL);
+    }
+    if (buddy_get_root()) {
+        lv_obj_add_event_cb(buddy_get_root(), global_click_cb, LV_EVENT_CLICKED, NULL);
     }
 
     logo_img = lv_image_create(scr);
@@ -492,17 +497,25 @@ void ui_tick_anim(void) {
     }
 }
 
-static screen_t prev_non_splash_screen = SCREEN_USAGE;
+// Last *data* screen (Usage/Bluetooth), so the top-level touch cycle can
+// return to whichever the user was last on. Buddy and Splash are their own
+// top-level modes and don't count as "data".
+static screen_t prev_data_screen = SCREEN_USAGE;
 static void apply_battery_visibility(void) {
     if (!battery_img) return;
     if (current_screen == SCREEN_SPLASH) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
     else                                  lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
 }
 
+// Touch is the top-level mode switch, cycling Data -> Splash -> Buddy -> Data.
+// (PWR cycles *within* a mode: Usage<->Bluetooth on Data, next art on Splash.)
 static void global_click_cb(lv_event_t* e) {
     (void)e;
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+    switch (current_screen) {
+    case SCREEN_SPLASH: ui_show_screen(SCREEN_BUDDY);       break;
+    case SCREEN_BUDDY:  ui_show_screen(prev_data_screen);   break;
+    default:            ui_show_screen(SCREEN_SPLASH);      break;  // from Data
+    }
 }
 
 static void ble_reset_click_cb(lv_event_t* e) {
@@ -514,37 +527,49 @@ void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(usage_container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ble_container, LV_OBJ_FLAG_HIDDEN);
     splash_hide();
+    buddy_hide();
 
     switch (screen) {
     case SCREEN_SPLASH:     splash_show(); break;
     case SCREEN_USAGE:      lv_obj_clear_flag(usage_container, LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_BLUETOOTH:  lv_obj_clear_flag(ble_container, LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_BUDDY:      buddy_show(); break;
     default: break;
     }
 
+    // Logo is part of the data-screen chrome; Splash and Buddy are full-bleed.
     if (logo_img) {
-        if (screen == SCREEN_SPLASH) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
-        else                          lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        if (screen == SCREEN_SPLASH || screen == SCREEN_BUDDY)
+            lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
+        else
+            lv_obj_clear_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (screen != SCREEN_SPLASH) prev_non_splash_screen = screen;
+    if (screen == SCREEN_USAGE || screen == SCREEN_BLUETOOTH)
+        prev_data_screen = screen;
     current_screen = screen;
     apply_battery_visibility();
 }
 
+// PWR cycles *within* the current top-level mode. On the Data screens that's
+// Usage<->Bluetooth. On Buddy there's nothing to cycle yet (Splash's next-art
+// is handled in main.cpp via splash_next()).
 void ui_cycle_screen(void) {
-    screen_t next;
     switch (current_screen) {
-    case SCREEN_USAGE:     next = SCREEN_BLUETOOTH; break;
-    case SCREEN_BLUETOOTH: next = SCREEN_USAGE;     break;
-    default:               next = SCREEN_USAGE;     break;
+    case SCREEN_USAGE:     ui_show_screen(SCREEN_BLUETOOTH); break;
+    case SCREEN_BLUETOOTH: ui_show_screen(SCREEN_USAGE);     break;
+    case SCREEN_BUDDY:     break;  // no-op: single screen in this mode for now
+    default:               ui_show_screen(SCREEN_USAGE);     break;
     }
-    ui_show_screen(next);
 }
 
 void ui_toggle_splash(void) {
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_non_splash_screen);
+    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_data_screen);
     else                                  ui_show_screen(SCREEN_SPLASH);
+}
+
+void ui_update_buddy(const BuddyState* buddy) {
+    if (buddy) buddy_set_state(buddy);
 }
 
 screen_t ui_get_current_screen(void) {

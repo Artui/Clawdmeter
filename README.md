@@ -132,11 +132,13 @@ View logs: `journalctl --user -u claude-usage-daemon -f`
 
 The board has three side buttons. Left and right do the same thing on every screen; the middle button is screen-aware.
 
-| Button           | GPIO         | Function                                                       |
-| ---------------- | ------------ | -------------------------------------------------------------- |
-| **Left**         | GPIO 0       | Hold to send Space (Claude Code voice-mode push-to-talk)       |
-| **Middle** (PWR) | AXP2101 PKEY | Cycle screens (Usage ↔ Bluetooth); on splash, cycle animations |
-| **Right**        | GPIO 18      | Press to send Shift+Tab (Claude Code mode toggle)              |
+| Button           | GPIO         | Function                                                          |
+| ---------------- | ------------ | ----------------------------------------------------------------- |
+| **Left**         | GPIO 0       | Hold to send Space (Claude Code voice-mode push-to-talk)          |
+| **Middle** (PWR) | AXP2101 PKEY | Cycle *within* the current mode: Usage ↔ Bluetooth, or next art   |
+| **Right**        | GPIO 18      | Press to send Shift+Tab (Claude Code mode toggle)                 |
+
+Navigation is two-level: **touch** the screen to switch top-level mode — **Data → Splash → Buddy → Data** — and **PWR** cycles within the current mode (Usage ↔ Bluetooth on Data, next animation on Splash).
 
 Space and Shift+Tab go out as standard BLE HID keyboard reports, so they trigger in whatever window has focus on the paired host — not just Claude Code.
 
@@ -154,10 +156,13 @@ The device advertises a custom GATT service alongside the standard HID keyboard 
 JSON payload format (written to RX):
 
 ```json
-{ "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true }
+{ "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true,
+  "b": { "sp": 4, "ra": 3, "lv": 6, "mo": 2, "ht": 1, "nm": "Dragon", "st": [62,40,81,55,73] } }
 ```
 
 Fields: `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag.
+
+The optional `b` block describes the Claude Buddy companion (the daemon derives it; the device just renders it): `sp` = species index, `ra` = rarity (0–4), `lv` = level, `mo` = mood index, `ht` = hat index, `nm` = name, `st` = the five stats (Debugging, Patience, Chaos, Wisdom, Snark). The whole payload stays well under the BLE ATT MTU.
 
 ## Recompiling fonts
 
@@ -254,6 +259,7 @@ See `tools/README.md` for details.
 ## Credits
 
 - Pixel-art Clawd animation by [@amaanbuilds](https://x.com/amaanbuilds), sourced from [claudepix.vercel.app](https://claudepix.vercel.app). Frame data and palettes scraped + converted by the tooling in `tools/`.
+- Claude Buddy companion — species ASCII art, hat/eye tables, and the deterministic generation pipeline (wyhash → mulberry32 → bones) are vendored from the MIT-licensed [1270011/claude-buddy](https://github.com/1270011/claude-buddy) and [fiorastudio/buddy](https://github.com/fiorastudio/buddy). See the credit header in `firmware/src/buddy_art.h`.
 - Lucide icon set ([lucide.dev](https://lucide.dev), MIT) for bluetooth and battery UI glyphs.
 - Anthropic brand fonts (Tiempos Text, Styrene B) — see licensing warning below.
 

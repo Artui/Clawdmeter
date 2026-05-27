@@ -49,13 +49,15 @@ firmware/src/
     waveshare_amoled_18/    — SH8601 + FT3168 + AXP + XCA9554 (PWR via EXIO4), no rotation
     template/               — copy this to bootstrap a new port
   main.cpp                  — setup() + loop(): HAL calls only, zero #ifdef BOARD_*
-  ui.{h,cpp}                — 3-screen UI (splash, usage, bluetooth). compute_layout() picks fonts/positions from board_caps() (responsive — current breakpoint: H >= 460 → large, else compact)
+  ui.{h,cpp}                — 4-screen UI (splash, usage, bluetooth, buddy). compute_layout() picks fonts/positions from board_caps() (responsive — current breakpoint: H >= 460 → large, else compact)
   splash.{h,cpp}            — 20×20 pixel-art engine. CELL = min(W,H)/20, centered.
-  ble.{h,cpp}               — NimBLE peripheral: custom data service + HID keyboard
-  data.h                    — UsageData struct
+  buddy.{h,cpp}             — "Claude Buddy" companion screen. Renders ASCII art (Mono font) + name/level/★ + 5 stat bars from BuddyState. Device is dumb; daemon/buddy.py is the brain.
+  buddy_art.h               — vendored MIT species art / hat / mood-eye tables (1270011/claude-buddy). Do not hand-author; re-port from upstream.
+  ble.{h,cpp}               — NimBLE peripheral: custom data service + HID keyboard. Bonding is an NVS opt-in flag (default OFF); see ble_get/set_bonding.
+  data.h                    — UsageData + BuddyState structs
   icons.h                   — icon arrays. Battery (5×) are RGB565A8 with alpha; rest are raw RGB565.
   logo.h                    — 80×80 RGB565 logo
-  font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 48/28/24/20/16/14/12, Mono 32/18)
+  font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 48/28/24/20/16/14/12, Mono 32/18). Mono fonts include the buddy glyphs (· ◉ ✦ ° × ★ █ ░ ω ≈) + the usage-spinner dingbats — regenerate via `make fonts` (tools/lv_font_patch.py), never drop those ranges.
   splash_animations.h       — generated, do not hand-edit
 docs/porting/               — adding-a-board.md, hal-contract.md, capability-flags.md
 ```
@@ -75,9 +77,15 @@ pio run -d firmware -e waveshare_amoled_18 -t upload --upload-port /dev/cu.usbmo
 pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port /dev/ttyACM0         # flash 2.16 on Linux
 ```
 
-If `pio` isn't on PATH: try `~/.platformio/penv/bin/pio` (Linux/macOS pio install) or `brew install platformio` on macOS.
+There's also a root `Makefile` wrapping all of this (OS-aware): `make build|flash|monitor|screenshot`, `make daemon-{install,start,stop,restart,logs,uninstall}`, `make reset-device [FACTORY=1]`, `make bonding-on|bonding-off` (serial commands to the device), `make buddy-show|buddy-seed SEED=…|buddy-roll|buddy-reset`, and `make fonts`. `ENV` and `PORT` are overridable.
+
+If `pio` isn't on PATH: try `~/.platformio/penv/bin/pio` (Linux/macOS pio install) or `brew install platformio` on macOS. (Hit the `pio-penv-segfault-rc11` memory's ensurepip fix once on this machine.)
 
 Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux. Both expose the ESP32-S3 native USB-JTAG (no boot-mode dance needed).
+
+**Navigation is two-level.** Touch = top-level mode switch cycling **Data → Splash → Buddy → Data** (`global_click_cb` in ui.cpp). PWR = cycle *within* the current mode: Usage↔Bluetooth on Data (`ui_cycle_screen`), next animation on Splash (`splash_next` in main.cpp), no-op on Buddy. `prev_data_screen` remembers which Data screen to return to.
+
+**Serial commands** (main.cpp `handle_serial_cmd`): `screenshot`, `reset`, `reset --factory` (wipe bonds + NVS), `bonding on|off` (persist + reboot), `bonding` (query).
 
 ## QA your own UI changes — don't ask the user
 
@@ -90,7 +98,7 @@ The boot screen is `SCREEN_SPLASH` and only advances on a physical button press,
 1. **CO5300 cannot rotate.** Its MADCTL only supports axis flips, not column/row exchange. Rotation is done by **CPU pixel remapping inside `display_hal_draw_bitmap`** in `boards/waveshare_amoled_216/display.cpp`. We use **PARTIAL render mode with strip rotation** (small 480×40 strips, fast). On rotation change → AMOLED brightness flash → force redraw (handled inside `display_hal_tick`).
 2. **OPI PSRAM** required: `board_build.arduino.memory_type = qio_opi` in platformio.ini. Without this, `MALLOC_CAP_SPIRAM` returns NULL and the screen is black.
 3. **pioarduino platform required.** GFX Library for Arduino needs Arduino Core 3.x (`esp32-hal-periman.h`), not the 2.x that standard `espressif32` ships. We pin `pioarduino/platform-espressif32` 55.03.38-1.
-4. **LVGL 9 font patching.** `lv_font_conv` outputs LVGL 8 format. Must remove `#if LVGL_VERSION_MAJOR >= 8` guards, drop `.cache` field, add `.release_glyph`, `.kerning`, `.static_bitmap`, `.fallback`, `.user_data`. Without patching, fonts render invisible.
+4. **LVGL 9 font patching.** `lv_font_conv` outputs LVGL 8 format. Must remove `#if LVGL_VERSION_MAJOR >= 8` guards, drop `.cache` field, add `.release_glyph`, `.kerning`, `.static_bitmap`, `.fallback`, `.user_data`. Without patching, fonts render invisible. **`tools/lv_font_patch.py` automates this** — `make fonts` runs lv_font_conv + the patcher and writes the Mono `.c` files directly.
 5. **Touch reading is centralized inside each board's `touch.cpp`.** The HAL `touch_hal_read()` is called once per loop from `my_touch_cb`; the board's implementation owns its latched `touch_pressed/x/y` state. Don't call the underlying controller from anywhere else — CST9220's `getPoint()` etc. do a full I2C transaction and concurrent callers consume each other's data.
 6. **Even-aligned flush regions.** `display_hal_round_area` (called from `rounder_cb`) is what each board uses to enforce this. Required on CO5300, harmless on SH8601.
 7. **Touch axis swap/mirror is per-board.** The 2.16's CST9220 needs `setSwapXY(true)` + `setMirrorXY(true, false)` — applied inside `boards/waveshare_amoled_216/touch.cpp::touch_hal_init()`. New ports apply their own.
@@ -131,7 +139,9 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Daemon / host side
 
-Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic API, sends JSON over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout.
+Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic API, sends JSON over BLE GATT. Run with `systemctl --user start claude-usage-daemon`. The unit file's `ExecStart` is the absolute path to the script — repoint it when switching between the worktree and the main checkout. (macOS uses the Python port `daemon/claude_usage_daemon.py` via launchd.)
+
+**Buddy brain (`daemon/buddy.py`).** Imported by the Python daemon; each poll appends a compact `b` block to the payload. Derives a deterministic buddy (wyhash→mulberry32→bones, ported from MIT upstream) from an identity resolved as: config overrides → `seed`/`$BUDDY_SEED` → cached account id (JWT `sub`, else host fallback). Config: `~/.config/claude-usage-monitor/buddy.toml` (see `daemon/buddy.example.toml`); state/XP: `buddy.json`. Mood (Phase 1) = time-of-day + usage pressure. `make buddy-*` manage it. Phase 2 (hooks → spool → mood/XP from real coding events) is not yet wired.
 
 **Discovery & resilience:**
 

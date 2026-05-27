@@ -3,11 +3,14 @@
 #include <lvgl.h>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
+#include <esp_system.h>
+#include <Preferences.h>
 
 #include "data.h"
 #include "ui.h"
 #include "ble.h"
 #include "splash.h"
+#include "buddy.h"
 #include "usage_rate.h"
 #include "idle.h"
 #include "idle_cfg.h"
@@ -20,6 +23,7 @@
 #include "hal/imu_hal.h"
 
 static UsageData usage = {};
+static BuddyState buddy = {};
 
 // ---- LVGL draw buffers (partial render mode) ----
 // PSRAM-equipped boards (S3) can comfortably hold larger strips. PSRAM-free
@@ -95,8 +99,10 @@ static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
     }
 }
 
-// Parse a JSON line into UsageData.
-static bool parse_json(const char* json, UsageData* out) {
+// Parse a JSON line into UsageData, plus an optional buddy block "b".
+// `buddy_present` is set true when a "b" object was found and decoded.
+static bool parse_json(const char* json, UsageData* out,
+                       BuddyState* bud, bool* buddy_present) {
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, json);
     if (err) {
@@ -111,6 +117,21 @@ static bool parse_json(const char* json, UsageData* out) {
     strlcpy(out->status, doc["st"] | "unknown", sizeof(out->status));
     out->ok = doc["ok"] | false;
     out->valid = true;
+
+    *buddy_present = false;
+    JsonObjectConst b = doc["b"];
+    if (!b.isNull()) {
+        bud->species = b["sp"] | 0;
+        bud->rarity  = b["ra"] | 0;
+        bud->level   = b["lv"] | 0;
+        bud->mood    = b["mo"] | 0;
+        bud->hat     = b["ht"] | 0;
+        strlcpy(bud->name, b["nm"] | "Buddy", sizeof(bud->name));
+        JsonArrayConst st = b["st"];
+        for (int i = 0; i < 5; i++) bud->stats[i] = i < (int)st.size() ? (uint8_t)st[i] : 0;
+        bud->valid = true;
+        *buddy_present = true;
+    }
     return true;
 }
 
@@ -157,12 +178,55 @@ static void send_screenshot() {
 #endif
 }
 
+// Wipe persisted device state (BLE bonds + NVS prefs) for a clean re-pair.
+static void factory_reset() {
+    Serial.println("FACTORY_RESET: clearing bonds + NVS");
+    ble_clear_bonds();
+    Preferences prefs;
+    if (prefs.begin("clawd", /*readOnly=*/false)) {
+        prefs.clear();
+        prefs.end();
+    }
+    Serial.flush();
+    delay(100);
+    esp_restart();
+}
+
+static void handle_serial_cmd(const char* cmd) {
+    if (strcmp(cmd, "screenshot") == 0) {
+        send_screenshot();
+    } else if (strcmp(cmd, "reset") == 0) {
+        Serial.println("RESET: restarting");
+        Serial.flush();
+        delay(100);
+        esp_restart();
+    } else if (strcmp(cmd, "reset --factory") == 0) {
+        factory_reset();
+    } else if (strcmp(cmd, "bonding on") == 0) {
+        ble_set_bonding(true);
+        Serial.println("RESET: restarting to apply");
+        Serial.flush();
+        delay(100);
+        esp_restart();
+    } else if (strcmp(cmd, "bonding off") == 0) {
+        ble_set_bonding(false);
+        Serial.println("RESET: restarting to apply");
+        Serial.flush();
+        delay(100);
+        esp_restart();
+    } else if (strcmp(cmd, "bonding") == 0) {
+        Serial.printf("bonding=%s\n", ble_get_bonding() ? "on" : "off");
+    } else if (cmd[0] != '\0') {
+        Serial.printf("unknown cmd: %s\n", cmd);
+    }
+}
+
 static void check_serial_cmd() {
     while (Serial.available()) {
         char c = Serial.read();
         if (c == '\n' || c == '\r') {
             cmd_buf[cmd_pos] = '\0';
-            if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
+            handle_serial_cmd(cmd_buf);
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
@@ -218,6 +282,7 @@ void setup() {
     ui_init();
     ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
+
     ui_show_screen(SCREEN_SPLASH);
 
     Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
@@ -234,6 +299,7 @@ void loop() {
     power_hal_tick();
     imu_hal_tick();
     splash_tick();
+    buddy_tick();
     // Rotation transition (blank + ramp) would fight the idle fade — skip
     // ticks while the panel is dark. A rotation that happens during sleep
     // is detected by the next tick after wake and ramped in then.
@@ -305,7 +371,8 @@ void loop() {
     check_serial_cmd();
 
     if (ble_has_data()) {
-        if (parse_json(ble_get_data(), &usage)) {
+        bool buddy_present = false;
+        if (parse_json(ble_get_data(), &usage, &buddy, &buddy_present)) {
             int g_before = usage_rate_group();
             usage_rate_sample(usage.session_pct);
             int g_after = usage_rate_group();
@@ -315,6 +382,7 @@ void loop() {
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);
+            if (buddy_present) ui_update_buddy(&buddy);
             ble_send_ack();
         } else {
             ble_send_nack();

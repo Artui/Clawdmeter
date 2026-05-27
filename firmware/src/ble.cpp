@@ -1,7 +1,12 @@
 #include "ble.h"
 #include <Arduino.h>
+#include <Preferences.h>
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
+
+// Persisted settings (NVS namespace shared with other device prefs).
+#define PREFS_NS      "clawd"
+#define PREFS_BONDING "bonding"
 
 #define DEVICE_NAME "Claude Controller"
 
@@ -146,9 +151,30 @@ class ReqCallbacks : public NimBLECharacteristicCallbacks {
     }
 };
 
+bool ble_get_bonding(void) {
+    Preferences prefs;
+    prefs.begin(PREFS_NS, /*readOnly=*/true);
+    bool on = prefs.getBool(PREFS_BONDING, false);  // default OFF
+    prefs.end();
+    return on;
+}
+
+void ble_set_bonding(bool on) {
+    Preferences prefs;
+    prefs.begin(PREFS_NS, /*readOnly=*/false);
+    prefs.putBool(PREFS_BONDING, on);
+    prefs.end();
+    Serial.printf("BLE: bonding set to %s (reboot to apply)\n", on ? "ON" : "OFF");
+}
+
 void ble_init(void) {
     NimBLEDevice::init(DEVICE_NAME);
-    NimBLEDevice::setSecurityAuth(true, false, true);  // bonding, no MITM, SC
+    // Bonding is an opt-in NVS flag (default OFF). With it off we advertise
+    // just-works security and store no keys, so the host can't end up holding a
+    // pairing the device has since forgotten (the CBError 14 reconnect trap).
+    bool bonding = ble_get_bonding();
+    NimBLEDevice::setSecurityAuth(bonding, false, bonding);  // bond, no MITM, SC
+    Serial.printf("BLE: bonding %s\n", bonding ? "ON" : "OFF");
 
     // Format MAC address
     NimBLEAddress addr = NimBLEDevice::getAddress();
