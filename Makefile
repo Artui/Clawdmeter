@@ -45,6 +45,7 @@ endef
 .PHONY: help build flash monitor screenshot \
         daemon-install daemon-start daemon-stop daemon-restart daemon-logs daemon-uninstall \
         reset-device bonding-on bonding-off \
+        buttons-show buttons-preset buttons-set \
         buddy-show buddy-seed buddy-roll buddy-reset \
         hooks-install hooks-uninstall fonts
 
@@ -53,6 +54,7 @@ help:
 	@echo "  Firmware:  build  flash  monitor  screenshot [OUT=...]"
 	@echo "  Daemon:    daemon-install  daemon-{start,stop,restart,logs,uninstall}"
 	@echo "  Device:    reset-device [FACTORY=1]  bonding-on  bonding-off"
+	@echo "  Buttons:   buttons-show  buttons-preset PRESET=navigation  buttons-set SLOT=.. ACTION=.."
 	@echo "  Buddy:     buddy-show  buddy-seed SEED=...  buddy-roll  buddy-reset"
 	@echo "  Hooks:     hooks-install  hooks-uninstall   (Phase 2)"
 	@echo "  Fonts:     fonts   (regenerate the Mono LVGL fonts)"
@@ -125,6 +127,19 @@ bonding-on:
 
 bonding-off:
 	$(call serial_send,bonding off)
+
+# Button mapping (see controls.{h,cpp}). buttons-show needs the serial monitor
+# to read replies; buttons-set/preset just send the command.
+buttons-show:
+	$(call serial_send,buttons)
+
+buttons-preset:
+	@test -n "$(PRESET)" || { echo "Usage: make buttons-preset PRESET=navigation"; exit 1; }
+	$(call serial_send,buttons preset $(PRESET))
+
+buttons-set:
+	@test -n "$(SLOT)" -a -n "$(ACTION)" || { echo "Usage: make buttons-set SLOT=primary ACTION=screen-next"; exit 1; }
+	$(call serial_send,buttons $(SLOT) $(ACTION))
 
 # ── Buddy identity (host-side; see daemon/buddy.py) ──────────────────────────
 BUDDY_TOML := $(HOME)/.config/claude-usage-monitor/buddy.toml

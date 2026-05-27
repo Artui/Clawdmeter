@@ -22,7 +22,7 @@ Connects to a host daemon over BLE; daemon polls Anthropic API for usage data. T
 - Touch: **CST9220** via I2C (SDA=15, SCL=14, INT=11, addr=0x5A)
 - PMU: **AXP2101** on same I2C bus (addr=0x34) — battery, USB VBUS, PWR button IRQ
 - IMU: **QMI8658** on same I2C bus (addr=0x6B) — accelerometer for auto-rotation
-- Buttons: GPIO 0 (left → Space/voice-mode), GPIO 18 (right → Shift+Tab/mode-toggle), AXP PKEY (middle → cycle screens; on splash → cycle animations)
+- Buttons: GPIO 0 (left/BOOT), GPIO 18 (right), AXP PKEY (middle/PWR — short + long press). Actions are configurable (see `controls.{h,cpp}`); no HID anymore.
 
 ### AMOLED-1.8 (newer port)
 - Display: **SH8601** AMOLED via QSPI (CS=12, **SCLK=11** ← different!, SDIO0..3=4..7, RST routed via XCA9554 EXIO1)
@@ -31,7 +31,7 @@ Connects to a host daemon over BLE; daemon polls Anthropic API for usage data. T
 - IMU: QMI8658 @ 0x6B (same chip — initialized for I2C bus health, rotation logic disabled)
 - IO expander: **XCA9554 / PCA9554** @ I2C 0x20. Gates LCD_RST, TP_RST, audio amp enable, and reads the PWR button. **`io_expander_init()` MUST run before `gfx->begin()` or `ft3168_init()`** — otherwise display/touch stay in reset and silently fail. PWR button is on EXIO4, active HIGH (verified empirically with the deleted `iox` serial debug command).
 - Orientation: **fixed at 0°**. IMU auto-rotation is disabled; `rotate_strip()` / `handle_rotation_change()` are excluded via `#ifndef BOARD_AMOLED_18`.
-- Buttons: GPIO 0 (BOOT → Space/voice-mode), XCA9554 EXIO4 (PWR → cycle screens; on splash → cycle animations). **No third button** (GPIO 18 button doesn't exist on this board).
+- Buttons: GPIO 0 (BOOT, primary), XCA9554 EXIO4 (PWR — short + software-timed long press). **No secondary button** (`button_count=1`) → navigation is forward-only here. Actions configurable via `controls.{h,cpp}`.
 
 ## Architecture
 
@@ -53,7 +53,8 @@ firmware/src/
   splash.{h,cpp}            — 20×20 pixel-art engine. CELL = min(W,H)/20, centered.
   buddy.{h,cpp}             — "Claude Buddy" companion screen. Renders ASCII art (Mono font) + name/level/★ + 5 stat bars from BuddyState. Device is dumb; daemon/buddy.py is the brain.
   buddy_art.h               — vendored MIT species art / hat / mood-eye tables (1270011/claude-buddy). Do not hand-author; re-port from upstream.
-  ble.{h,cpp}               — NimBLE peripheral: custom data service + HID keyboard. Bonding is an NVS opt-in flag (default OFF); see ble_get/set_bonding.
+  ble.{h,cpp}               — NimBLE peripheral: custom data service only (HID keyboard removed — device no longer sends keys nor shows in the macOS BT GUI; daemon finds it by name). Bonding is an NVS opt-in flag (default OFF); see ble_get/set_bonding.
+  controls.{h,cpp}          — configurable button→action map (NVS), board-aware navigation default. dispatch_action() in main.cpp runs the action.
   data.h                    — UsageData + BuddyState structs
   icons.h                   — icon arrays. Battery (5×) are RGB565A8 with alpha; rest are raw RGB565.
   logo.h                    — 80×80 RGB565 logo
@@ -83,9 +84,11 @@ If `pio` isn't on PATH: try `~/.platformio/penv/bin/pio` (Linux/macOS pio instal
 
 Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux. Both expose the ESP32-S3 native USB-JTAG (no boot-mode dance needed).
 
-**Navigation is two-level.** Touch = top-level mode switch cycling **Data → Splash → Buddy → Data** (`global_click_cb` in ui.cpp). PWR = cycle *within* the current mode: Usage↔Bluetooth on Data (`ui_cycle_screen`), next animation on Splash (`splash_next` in main.cpp), no-op on Buddy. `prev_data_screen` remembers which Data screen to return to.
+**Navigation.** Top-level screens cycle **Data ↔ Splash ↔ Buddy** via `ui_screen_next/prev` (Data == last Usage/BT screen, tracked in `prev_data_screen`). "Within" a screen = `ui_cycle_within`: Usage↔Bluetooth / `splash_next` / `buddy_cycle_view` (buddy sub-views Full→Creature→Stats). Touch = `ui_screen_next`. **Buttons are configurable** (`controls.{h,cpp}`, NVS): each slot (primary/secondary/pwr-short/pwr-long) → an action (screen-next/prev, cycle-within, sleep, none); default = board-aware navigation. `main.cpp::dispatch_action` runs them; PWR long-press → `idle_sleep_now()`.
 
-**Serial commands** (main.cpp `handle_serial_cmd`): `screenshot`, `reset`, `reset --factory` (wipe bonds + NVS), `bonding on|off` (persist + reboot), `bonding` (query).
+**Sleep.** `idle_sleep_now()` (manual sleep) stays asleep even on USB power (sticky `manual_sleep` flag); any button wakes. PWR long-press: 2.16/C6 use the AXP2101 `PKEY_LONG_IRQ` (power-off hold time pushed to 10 s so it won't cut power); 1.8 software-times EXIO4 (short fires on release, long at ~700 ms). HAL: `power_hal_pwr_long_pressed()`.
+
+**Serial commands** (main.cpp `handle_serial_cmd`): `screenshot`, `reset`, `reset --factory` (wipe bonds + NVS), `bonding on|off|`(query), `buttons [preset navigation | <slot> <action>]`.
 
 ## QA your own UI changes — don't ask the user
 

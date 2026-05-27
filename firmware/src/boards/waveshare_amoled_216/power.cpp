@@ -4,7 +4,9 @@
 #include <Wire.h>
 #include <XPowersLib.h>
 
-// PWR button comes from AXP2101 PKEY short-press IRQ.
+// PWR button comes from the AXP2101 PKEY IRQ — short press (UI action) and
+// long press (manual sleep). The hardware power-off hold time is pushed to its
+// max so a long-press fires the IRQ well before the PMU would cut power.
 
 #define BATTERY_POLL_MS  2000
 #define CHARGING_POLL_MS 500
@@ -16,6 +18,7 @@ static int      cached_pct       = -1;
 static bool     cached_charging  = false;
 static bool     cached_vbus      = false;
 static bool     pwr_pressed_flag = false;
+static bool     pwr_long_flag    = false;
 static uint32_t last_battery_ms  = 0;
 static uint32_t last_charging_ms = 0;
 static uint32_t last_pwr_ms      = 0;
@@ -32,7 +35,10 @@ void power_hal_init(void) {
 
     pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
     pmu.clearIrqStatus();
-    pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ);
+    pmu.enableIRQ(XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_PKEY_LONG_IRQ);
+    // Push the hardware power-off hold time to its maximum (10 s) so our
+    // ~1.5 s long-press IRQ fires for "sleep" long before the PMU cuts power.
+    pmu.setPowerKeyPressOffTime(XPOWERS_POWEROFF_10S);
 
     cached_charging = pmu.isCharging();
     cached_vbus     = pmu.isVbusIn();
@@ -57,6 +63,9 @@ void power_hal_tick(void) {
         if (pmu.isPekeyShortPressIrq()) {
             pwr_pressed_flag = true;
         }
+        if (pmu.isPekeyLongPressIrq()) {
+            pwr_long_flag = true;
+        }
         pmu.clearIrqStatus();
     }
 }
@@ -68,6 +77,14 @@ bool power_hal_is_vbus_in(void)  { return cached_vbus; }
 bool power_hal_pwr_pressed(void) {
     if (pwr_pressed_flag) {
         pwr_pressed_flag = false;
+        return true;
+    }
+    return false;
+}
+
+bool power_hal_pwr_long_pressed(void) {
+    if (pwr_long_flag) {
+        pwr_long_flag = false;
         return true;
     }
     return false;

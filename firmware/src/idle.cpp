@@ -12,6 +12,9 @@ enum IdleState {
 };
 
 static IdleState state = STATE_AWAKE;
+// Set when the user deliberately slept the device (vs. the idle timeout). While
+// set, idle_tick() won't auto-wake on USB power — only a button press clears it.
+static bool manual_sleep = false;
 static uint32_t last_activity_ms = 0;
 static uint32_t fade_started_ms  = 0;
 static uint32_t fade_last_step_ms = 0;
@@ -45,10 +48,18 @@ void idle_note_activity(void) {
     state = STATE_FADING_IN;
 }
 
+void idle_sleep_now(void) {
+    if (state == STATE_ASLEEP || state == STATE_FADING_OUT) return;
+    manual_sleep = true;
+    begin_fade(0, millis());
+    state = STATE_FADING_OUT;
+}
+
 bool idle_consume_wake_press(void) {
     if (state == STATE_ASLEEP || state == STATE_FADING_OUT) {
         uint32_t now = millis();
         last_activity_ms = now;
+        manual_sleep = false;
         begin_fade(DISPLAY_DEFAULT_BRIGHTNESS, now);
         state = STATE_FADING_IN;
         return true;
@@ -71,8 +82,10 @@ void idle_tick(void) {
     uint32_t now = millis();
 
     // While on USB power (if configured), don't sleep — and wake from sleep
-    // when power comes back. Treats USB-in as continuous activity.
-    if (!IDLE_SLEEP_WHEN_CHARGING && power_hal_is_vbus_in()) {
+    // when power comes back. Treats USB-in as continuous activity. A *manual*
+    // sleep opts out of this: the user asked for screen-off, so honour it even
+    // while plugged in (only a button press wakes it).
+    if (!IDLE_SLEEP_WHEN_CHARGING && !manual_sleep && power_hal_is_vbus_in()) {
         last_activity_ms = now;
         if (state == STATE_ASLEEP || state == STATE_FADING_OUT) {
             begin_fade(DISPLAY_DEFAULT_BRIGHTNESS, now);

@@ -507,15 +507,10 @@ static void apply_battery_visibility(void) {
     else                                  lv_obj_clear_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
 }
 
-// Touch is the top-level mode switch, cycling Data -> Splash -> Buddy -> Data.
-// (PWR cycles *within* a mode: Usage<->Bluetooth on Data, next art on Splash.)
+// Touch is a top-level mode switch (same as a SCREEN_NEXT button action).
 static void global_click_cb(lv_event_t* e) {
     (void)e;
-    switch (current_screen) {
-    case SCREEN_SPLASH: ui_show_screen(SCREEN_BUDDY);       break;
-    case SCREEN_BUDDY:  ui_show_screen(prev_data_screen);   break;
-    default:            ui_show_screen(SCREEN_SPLASH);      break;  // from Data
-    }
+    ui_screen_next();
 }
 
 static void ble_reset_click_cb(lv_event_t* e) {
@@ -551,21 +546,34 @@ void ui_show_screen(screen_t screen) {
     apply_battery_visibility();
 }
 
-// PWR cycles *within* the current top-level mode. On the Data screens that's
-// Usage<->Bluetooth. On Buddy there's nothing to cycle yet (Splash's next-art
-// is handled in main.cpp via splash_next()).
-void ui_cycle_screen(void) {
+// Top-level mode order is Data -> Splash -> Buddy (Data == the last Usage/BT
+// screen you were on, remembered in prev_data_screen).
+void ui_screen_next(void) {
     switch (current_screen) {
-    case SCREEN_USAGE:     ui_show_screen(SCREEN_BLUETOOTH); break;
-    case SCREEN_BLUETOOTH: ui_show_screen(SCREEN_USAGE);     break;
-    case SCREEN_BUDDY:     break;  // no-op: single screen in this mode for now
-    default:               ui_show_screen(SCREEN_USAGE);     break;
+    case SCREEN_SPLASH: ui_show_screen(SCREEN_BUDDY);     break;
+    case SCREEN_BUDDY:  ui_show_screen(prev_data_screen); break;
+    default:            ui_show_screen(SCREEN_SPLASH);    break;  // from Data
     }
 }
 
-void ui_toggle_splash(void) {
-    if (current_screen == SCREEN_SPLASH) ui_show_screen(prev_data_screen);
-    else                                  ui_show_screen(SCREEN_SPLASH);
+void ui_screen_prev(void) {
+    switch (current_screen) {
+    case SCREEN_SPLASH: ui_show_screen(prev_data_screen); break;
+    case SCREEN_BUDDY:  ui_show_screen(SCREEN_SPLASH);    break;
+    default:            ui_show_screen(SCREEN_BUDDY);     break;  // from Data
+    }
+}
+
+// Cycle *within* the current top-level mode: Usage<->Bluetooth on Data, next
+// animation on Splash, next sub-view on Buddy.
+void ui_cycle_within(void) {
+    switch (current_screen) {
+    case SCREEN_USAGE:     ui_show_screen(SCREEN_BLUETOOTH); break;
+    case SCREEN_BLUETOOTH: ui_show_screen(SCREEN_USAGE);     break;
+    case SCREEN_SPLASH:    splash_next();                    break;
+    case SCREEN_BUDDY:     buddy_cycle_view();               break;
+    default:               break;
+    }
 }
 
 void ui_update_buddy(const BuddyState* buddy) {

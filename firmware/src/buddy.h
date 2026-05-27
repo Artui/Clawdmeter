@@ -14,6 +14,9 @@ void buddy_set_state(const BuddyState* s);
 // Advance the idle animation (frame cycle + blink). Call every loop.
 void buddy_tick(void);
 
+// Cycle the on-screen sub-view: Full -> Creature-only -> Stats-only.
+void buddy_cycle_view(void);
+
 void buddy_show(void);
 void buddy_hide(void);
 
