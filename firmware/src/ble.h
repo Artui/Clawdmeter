@@ -14,6 +14,12 @@ ble_state_t ble_get_state(void);
 const char* ble_get_device_name(void);
 const char* ble_get_mac_address(void);
 void ble_clear_bonds(void);
+
+// BLE bonding (pairing-key storage) is a persisted, opt-in toggle. Default OFF
+// ("just-works", unencrypted) so a reflash/bond-eviction can't desync keys with
+// the host and cause CBError 14 reconnect failures. Read at boot by ble_init().
+bool ble_get_bonding(void);
+void ble_set_bonding(bool on);  // persists to NVS; caller must reboot to apply
 bool ble_has_data(void);
 const char* ble_get_data(void);
 void ble_send_ack(void);

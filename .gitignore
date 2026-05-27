@@ -5,6 +5,9 @@ firmware/.vscode/
 # OS
 .DS_Store
 
+# JetBrains IDEs
+.idea/
+
 # Claude Code
 .claude/
 

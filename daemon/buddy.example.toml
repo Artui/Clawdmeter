@@ -1,0 +1,23 @@
+# Claude Buddy configuration — copy to:
+#   ~/.config/claude-usage-monitor/buddy.toml
+# Everything here is optional. With no config, the buddy is derived
+# deterministically from your account identity (stable across runs/reflashes).
+#
+# Identity precedence (highest first):
+#   1. [overrides] fields below  — pinned verbatim, bypass generation
+#   2. seed (or $BUDDY_SEED env) — hash any string to a reproducible buddy
+#   3. account identity          — the default
+
+# Override the account identity with any string to reroll a custom buddy.
+# Same string always yields the same species/rarity/stats.
+# seed = "my-favorite-seed"
+
+# Pin specific fields; anything omitted is still generated from the identity.
+# [overrides]
+# species = "dragon"     # duck goose blob cat dragon octopus owl penguin turtle
+#                        # snail ghost axolotl capybara cactus robot rabbit
+#                        # mushroom chonk wyvern pikachu
+# rarity  = "legendary"  # common uncommon rare epic legendary
+# hat     = "crown"      # none crown tophat propeller halo wizard beanie tinyduck
+# name    = "Sparky"     # shown on the device (max 15 chars)
+# stats   = { debug = 99, patience = 10, chaos = 80, wisdom = 70, snark = 88 }

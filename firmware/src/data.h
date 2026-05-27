@@ -10,3 +10,18 @@ struct UsageData {
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
 };
+
+// Companion ("Claude Buddy") state. The daemon (daemon/buddy.py) is the brain:
+// it derives species/rarity/stats deterministically from the account identity
+// and computes mood; the device is the body and just renders what it's told.
+// Indices match the upstream tables vendored in buddy_art.h.
+struct BuddyState {
+    uint8_t species;   // index into BUDDY_SPECIES_ART (0..BUDDY_SPECIES_COUNT-1)
+    uint8_t rarity;    // 0=common .. 4=legendary; stars shown = rarity + 1
+    uint8_t level;     // XP level (Phase 1: cosmetic, supplied by daemon)
+    uint8_t mood;      // 0=happy 1=focused 2=excited 3=tired 4=melancholy 5=chaotic
+    uint8_t hat;       // 0=none .. 7=tinyduck (index into BUDDY_HAT_ART)
+    uint8_t stats[5];  // DEBUGGING, PATIENCE, CHAOS, WISDOM, SNARK (each 0..100)
+    char name[16];
+    bool valid;        // false until first buddy block parsed
+};

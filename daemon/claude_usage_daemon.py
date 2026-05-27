@@ -21,6 +21,8 @@ import httpx
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
 
+import buddy
+
 DEVICE_NAME = "Claude Controller"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
@@ -263,6 +265,12 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
                 else:
                     payload = await poll_api(token)
                     if payload is not None:
+                        # The companion block rides along with each usage poll.
+                        # A buddy failure must never block usage reporting.
+                        try:
+                            payload["b"] = buddy.update_and_block(payload, token)
+                        except Exception as e:  # noqa: BLE001
+                            log(f"Buddy block skipped: {e}")
                         if await session.write_payload(payload):
                             last_poll = time.time()
                             used_successfully = True
