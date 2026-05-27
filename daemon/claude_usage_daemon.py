@@ -202,6 +202,44 @@ async def poll_api(token: str) -> dict | None:
     return payload
 
 
+async def generate_llm_remark(token: str, req: dict) -> str | None:
+    """Generate a buddy remark via the messages API (Phase 3, opt-in).
+
+    Reuses the Claude Code OAuth token + headers. The static persona system
+    prompt is sent cache_control:ephemeral for a prompt-cache hit; the dynamic
+    situation is in the user turn. Any failure returns None so the caller keeps
+    the curated fallback line.
+    """
+    headers = dict(API_HEADERS_TEMPLATE)
+    headers["Authorization"] = f"Bearer {token}"
+    body = {
+        "model": req["model"],
+        "max_tokens": 48,
+        "temperature": 1.0,
+        "system": [
+            {"type": "text", "text": buddy.LLM_IDENTITY},
+            {"type": "text", "text": buddy.LLM_PERSONA,
+             "cache_control": {"type": "ephemeral"}},
+        ],
+        "messages": [{"role": "user", "content": req["user"]}],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as http:
+            resp = await http.post(API_URL, headers=headers, json=body)
+    except httpx.HTTPError as e:
+        log(f"LLM remark failed: {e}")
+        return None
+    if resp.status_code >= 400:
+        log(f"LLM remark HTTP {resp.status_code}: {resp.text[:160]}")
+        return None
+    try:
+        parts = resp.json().get("content", [])
+        text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+    except (ValueError, AttributeError):
+        return None
+    return buddy.sanitize_remark(text.strip().strip('"').strip()) or None
+
+
 class Session:
     def __init__(self, client: BleakClient) -> None:
         self.client = client
@@ -268,7 +306,16 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
                         # The companion block rides along with each usage poll.
                         # A buddy failure must never block usage reporting.
                         try:
-                            payload["b"] = buddy.update_and_block(payload, token)
+                            block, llm_req = buddy.update_and_block(payload, token)
+                            payload["b"] = block
+                            # Phase 3: optionally upgrade the curated remark to a
+                            # freshly generated one. The curated line stays as the
+                            # fallback, so a failed call just ships the original.
+                            if llm_req:
+                                gen = await generate_llm_remark(token, llm_req)
+                                if gen:
+                                    block["rm"] = gen
+                                    log(f"LLM remark: {gen}")
                         except Exception as e:  # noqa: BLE001
                             log(f"Buddy block skipped: {e}")
                         if await session.write_payload(payload):

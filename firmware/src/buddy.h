@@ -17,6 +17,14 @@ void buddy_tick(void);
 // Cycle the on-screen sub-view: Full -> Creature-only -> Stats-only.
 void buddy_cycle_view(void);
 
+// Pop a random device-local phrase (e.g. on a LEFT+RIGHT button combo).
+void buddy_say_random(void);
+
+// Bubble lifetime in ms (configurable via the daemon's `bd` field). The getter
+// lets ui.cpp keep the forced-remark foreground window in sync.
+void buddy_set_bubble_ms(uint32_t ms);
+uint32_t buddy_get_bubble_ms(void);
+
 void buddy_show(void);
 void buddy_hide(void);
 

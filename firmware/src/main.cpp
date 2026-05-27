@@ -130,6 +130,10 @@ static bool parse_json(const char* json, UsageData* out,
         strlcpy(bud->name, b["nm"] | "Buddy", sizeof(bud->name));
         JsonArrayConst st = b["st"];
         for (int i = 0; i < 5; i++) bud->stats[i] = i < (int)st.size() ? (uint8_t)st[i] : 0;
+        strlcpy(bud->remark, b["rm"] | "", sizeof(bud->remark));
+        bud->remark_force = b["rf"] | false;
+        bud->tint = b["tc"] | 0x01;  // default: tint stars only
+        bud->bubble_secs = b["bd"] | 0;  // 0 → keep firmware default
         bud->valid = true;
         *buddy_present = true;
     }
@@ -356,19 +360,40 @@ void loop() {
     // consumed as a wake-only event by idle_consume_wake_press(), which also
     // notes activity — so no separate idle_note_activity() is needed.
     {
-        static bool primary_was = false;
-        bool primary_now = input_hal_is_held(INPUT_BTN_PRIMARY);
-        if (primary_now && !primary_was)
-            if (!idle_consume_wake_press()) dispatch_action(controls_get(BTN_SLOT_PRIMARY));
-        primary_was = primary_now;
+        bool two = board_caps().button_count >= 2;
+        bool p = input_hal_is_held(INPUT_BTN_PRIMARY);
+        bool s = two && input_hal_is_held(INPUT_BTN_SECONDARY);
+        static bool p_was = false, s_was = false;
+        // Per hold-cycle latches (reset when everything is released):
+        //   woke  — this cycle woke the device, so its actions are swallowed.
+        //   combo — a LEFT+RIGHT combo fired, so single-button actions are too.
+        static bool woke = false, combo = false;
 
-        if (board_caps().button_count >= 2) {
-            static bool secondary_was = false;
-            bool secondary_now = input_hal_is_held(INPUT_BTN_SECONDARY);
-            if (secondary_now && !secondary_was)
-                if (!idle_consume_wake_press()) dispatch_action(controls_get(BTN_SLOT_SECONDARY));
-            secondary_was = secondary_now;
+        // Wake on any press edge; remember if it was a wake so we don't also
+        // fire the button's normal action.
+        if ((p && !p_was) || (s && !s_was))
+            if (idle_consume_wake_press()) woke = true;
+
+        if (two) {
+            // LEFT + RIGHT held together → a random buddy phrase. Single-button
+            // nav fires on RELEASE here, so the combo can claim the press first.
+            if (p && s && !combo && !woke) {
+                combo = true;
+                ui_show_screen(SCREEN_BUDDY);
+                buddy_say_random();
+            }
+            if (!p && p_was && !combo && !woke)
+                dispatch_action(controls_get(BTN_SLOT_PRIMARY));
+            if (!s && s_was && !combo && !woke)
+                dispatch_action(controls_get(BTN_SLOT_SECONDARY));
+        } else {
+            // Single button → fire on the press edge (no combo possible).
+            if (p && !p_was && !woke)
+                dispatch_action(controls_get(BTN_SLOT_PRIMARY));
         }
+
+        if (!p && !s) { woke = false; combo = false; }
+        p_was = p; s_was = s;
 
         if (power_hal_pwr_pressed())
             if (!idle_consume_wake_press()) dispatch_action(controls_get(BTN_SLOT_PWR_SHORT));

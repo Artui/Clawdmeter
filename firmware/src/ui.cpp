@@ -128,6 +128,15 @@ static lv_image_dsc_t battery_dscs[5];  // empty, low, medium, full, charging
 static lv_image_dsc_t logo_dsc;
 static screen_t current_screen = SCREEN_USAGE;
 
+// When the daemon flags a remark "force" (buddy.toml foreground=true), we pop
+// the buddy screen to the front, then return to where the user was. The window
+// matches the configured bubble lifetime (buddy_get_bubble_ms) so the buddy is
+// visible for as long as it's talking.
+static bool     remark_popup_active = false;
+static uint32_t remark_popup_until  = 0;
+static screen_t pre_remark_screen   = SCREEN_USAGE;
+static char     last_forced_remark[96] = "";
+
 // Animation state
 static uint32_t anim_last_ms = 0;
 static uint8_t anim_spinner_idx = 0;
@@ -474,6 +483,17 @@ void ui_update(const UsageData* data) {
 }
 
 void ui_tick_anim(void) {
+    // Return from a forced remark pop-up once its window elapses. If the user
+    // navigated away in the meantime, just drop the pending revert.
+    if (remark_popup_active) {
+        if (current_screen != SCREEN_BUDDY) {
+            remark_popup_active = false;
+        } else if ((int32_t)(lv_tick_get() - remark_popup_until) >= 0) {
+            remark_popup_active = false;
+            ui_show_screen(pre_remark_screen);
+        }
+    }
+
     if (current_screen != SCREEN_USAGE) return;
 
     uint32_t now = lv_tick_get();
@@ -577,7 +597,22 @@ void ui_cycle_within(void) {
 }
 
 void ui_update_buddy(const BuddyState* buddy) {
-    if (buddy) buddy_set_state(buddy);
+    if (!buddy) return;
+    buddy_set_state(buddy);
+
+    // Configurable foreground pop: the daemon sets remark_force when buddy.toml
+    // has foreground=true. Only pop for a *new* remark, and don't disturb the
+    // splash boot screen (it advances only on a button press).
+    bool new_remark = buddy->remark[0] &&
+                      strcmp(buddy->remark, last_forced_remark) != 0;
+    strlcpy(last_forced_remark, buddy->remark, sizeof(last_forced_remark));
+    if (buddy->remark_force && new_remark &&
+        current_screen != SCREEN_BUDDY && current_screen != SCREEN_SPLASH) {
+        pre_remark_screen = current_screen;
+        remark_popup_active = true;
+        remark_popup_until = lv_tick_get() + buddy_get_bubble_ms();
+        ui_show_screen(SCREEN_BUDDY);
+    }
 }
 
 screen_t ui_get_current_screen(void) {

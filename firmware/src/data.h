@@ -23,5 +23,9 @@ struct BuddyState {
     uint8_t hat;       // 0=none .. 7=tinyduck (index into BUDDY_HAT_ART)
     uint8_t stats[5];  // DEBUGGING, PATIENCE, CHAOS, WISDOM, SNARK (each 0..100)
     char name[16];
+    char remark[96];   // transient line the buddy "says" (ASCII; "" when silent)
+    bool remark_force; // daemon asks the device to pop the buddy screen to front
+    uint8_t tint;      // rarity-color targets bitmask: 1=stars 2=name 4=creature
+    uint8_t bubble_secs; // how long a remark bubble stays up (0 = keep default)
     bool valid;        // false until first buddy block parsed
 };
