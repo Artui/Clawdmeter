@@ -36,6 +36,10 @@ static lv_obj_t* lbl_stats = nullptr;  // 5 stat rows
 
 static BuddyState state = {};
 
+// Sub-view cycled by "cycle within" (PWR by default) while on the buddy screen.
+enum BuddyView { BUDDY_VIEW_FULL, BUDDY_VIEW_CREATURE, BUDDY_VIEW_STATS, BUDDY_VIEW_COUNT };
+static BuddyView view = BUDDY_VIEW_FULL;
+
 // ---- Animation ----
 static uint8_t  cur_frame = 0;
 static uint32_t frame_started_ms = 0;
@@ -121,7 +125,9 @@ static void render_meta(void) {
 
 static void render_stats(void) {
     if (!lbl_stats || !state.valid) return;
-    static char buf[256];
+    bool full = (view == BUDDY_VIEW_STATS);  // dedicated view → full stat names
+    int lblw = full ? 9 : 3;
+    static char buf[320];
     char* dst = buf;
     const char* end = buf + sizeof(buf);
     for (int i = 0; i < BUDDY_STAT_COUNT; i++) {
@@ -129,7 +135,8 @@ static void render_stats(void) {
         int filled = (val * STAT_BARS + 50) / 100;   // round to nearest cell
         char row[96];
         char* r = row;
-        r += snprintf(r, sizeof(row), "%s ", BUDDY_STAT_LABELS[i]);
+        r += snprintf(r, sizeof(row), "%-*s ", lblw,
+                      full ? BUDDY_STAT_FULL[i] : BUDDY_STAT_LABELS[i]);
         for (int b = 0; b < STAT_BARS; b++)
             r = append(r, row + sizeof(row), b < filled ? BAR_FULL : BAR_EMPTY);
         snprintf(r, sizeof(row) - (r - row), " %3d", val);
@@ -139,10 +146,43 @@ static void render_stats(void) {
     lv_label_set_text(lbl_stats, buf);
 }
 
+// Show/hide + reposition the labels for the current sub-view. The header
+// (name/level + stars) is shown in every view; the creature and the stat bars
+// toggle. STATS view renders the bars centered with full stat names.
+static void apply_view(void) {
+    if (!root) return;
+    bool show_art   = (view != BUDDY_VIEW_STATS);
+    bool show_stats = (view != BUDDY_VIEW_CREATURE);
+
+    if (lbl_art) {
+        if (show_art) lv_obj_clear_flag(lbl_art, LV_OBJ_FLAG_HIDDEN);
+        else          lv_obj_add_flag(lbl_art, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (lbl_stats) {
+        if (show_stats) lv_obj_clear_flag(lbl_stats, LV_OBJ_FLAG_HIDDEN);
+        else            lv_obj_add_flag(lbl_stats, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    switch (view) {
+    case BUDDY_VIEW_FULL:
+        lv_obj_align(lbl_art, LV_ALIGN_TOP_MID, 0, BL.creature_y);
+        lv_obj_align(lbl_stats, LV_ALIGN_BOTTOM_MID, 0, BL.stats_y);
+        break;
+    case BUDDY_VIEW_CREATURE:
+        lv_obj_align(lbl_art, LV_ALIGN_CENTER, 0, 10);     // big, centered
+        break;
+    case BUDDY_VIEW_STATS:
+        lv_obj_align(lbl_stats, LV_ALIGN_CENTER, 0, 20);   // block under header
+        break;
+    default: break;
+    }
+    render_stats();  // label set (short vs full) depends on the view
+}
+
 static void render_all(void) {
     render_art();
     render_meta();
-    render_stats();
+    apply_view();
 }
 
 void buddy_init(lv_obj_t* parent) {
@@ -231,8 +271,14 @@ void buddy_tick(void) {
 void buddy_show(void) {
     if (!root) return;
     lv_obj_clear_flag(root, LV_OBJ_FLAG_HIDDEN);
+    view = BUDDY_VIEW_FULL;   // always (re)enter on the full view
     frame_started_ms = blink_started_ms = millis();
     render_all();
+}
+
+void buddy_cycle_view(void) {
+    view = (BuddyView)((view + 1) % BUDDY_VIEW_COUNT);
+    apply_view();
 }
 
 void buddy_hide(void) {

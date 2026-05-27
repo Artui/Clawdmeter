@@ -11,6 +11,7 @@
 #include "ble.h"
 #include "splash.h"
 #include "buddy.h"
+#include "controls.h"
 #include "usage_rate.h"
 #include "idle.h"
 #include "idle_cfg.h"
@@ -192,9 +193,40 @@ static void factory_reset() {
     esp_restart();
 }
 
+// `buttons`                     — print the current map
+// `buttons preset navigation`   — reset to the board-aware default
+// `buttons <slot> <action>`     — assign one slot
+//   slots: primary secondary pwr-short pwr-long
+//   actions: none screen-next screen-prev cycle-within sleep
+static void handle_buttons_cmd(const char* args) {
+    while (*args == ' ') args++;
+    if (*args == '\0') {
+        for (int i = 0; i < BTN_SLOT_COUNT; i++)
+            Serial.printf("buttons %s = %s\n", controls_slot_name((BtnSlot)i),
+                          controls_action_name(controls_get((BtnSlot)i)));
+        return;
+    }
+    char a[24] = {0}, b[24] = {0};
+    int n = sscanf(args, "%23s %23s", a, b);
+    if (n == 2 && strcmp(a, "preset") == 0 && strcmp(b, "navigation") == 0) {
+        controls_apply_preset_navigation();
+        Serial.println("buttons: navigation preset applied");
+        return;
+    }
+    BtnSlot slot; BtnAction action;
+    if (n == 2 && controls_slot_from_str(a, &slot) && controls_action_from_str(b, &action)) {
+        controls_set(slot, action);
+        Serial.printf("buttons %s = %s\n", controls_slot_name(slot), controls_action_name(action));
+        return;
+    }
+    Serial.println("usage: buttons | buttons preset navigation | buttons <slot> <action>");
+}
+
 static void handle_serial_cmd(const char* cmd) {
     if (strcmp(cmd, "screenshot") == 0) {
         send_screenshot();
+    } else if (strncmp(cmd, "buttons", 7) == 0) {
+        handle_buttons_cmd(cmd + 7);
     } else if (strcmp(cmd, "reset") == 0) {
         Serial.println("RESET: restarting");
         Serial.flush();
@@ -231,6 +263,18 @@ static void check_serial_cmd() {
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
         }
+    }
+}
+
+// Run a configured button action.
+static void dispatch_action(BtnAction a) {
+    switch (a) {
+    case BTN_ACTION_SCREEN_NEXT:  ui_screen_next();  break;
+    case BTN_ACTION_SCREEN_PREV:  ui_screen_prev();  break;
+    case BTN_ACTION_CYCLE_WITHIN: ui_cycle_within(); break;
+    case BTN_ACTION_SLEEP:        idle_sleep_now();  break;
+    case BTN_ACTION_NONE:
+    default:                      break;
     }
 }
 
@@ -278,6 +322,7 @@ void setup() {
 
     ble_init();
     input_hal_init();
+    controls_init();
 
     ui_init();
     ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
@@ -305,51 +350,30 @@ void loop() {
     // is detected by the next tick after wake and ramped in then.
     if (!idle_is_asleep()) display_hal_tick();
 
-    // ---- Physical buttons ----
-    //   PRIMARY   → HID Space  (Claude Code voice-mode PTT)
-    //   SECONDARY → HID Shift+Tab  (mode toggle; only if the board has one)
-    //   PWR       → cycle screens; on splash, cycle animations
-    // First press from sleep is consumed as a wake-only event by
-    // idle_consume_wake_press(); the normal action fires from the second
-    // press. Activity bookkeeping happens inside idle_consume_wake_press
-    // so no separate idle_note_activity() call is needed here.
+    // ---- Physical buttons (configurable; see controls.{h,cpp}) ----
+    // Each button slot maps to a UI action. Navigation actions fire on the
+    // press edge (momentary, not hold-to-send). The first press from sleep is
+    // consumed as a wake-only event by idle_consume_wake_press(), which also
+    // notes activity — so no separate idle_note_activity() is needed.
     {
         static bool primary_was = false;
-        static bool primary_wake_swallowed = false;
         bool primary_now = input_hal_is_held(INPUT_BTN_PRIMARY);
-        if (primary_now != primary_was) {
-            if (primary_now) {
-                if (idle_consume_wake_press()) primary_wake_swallowed = true;
-                else                            ble_keyboard_press(0x2C, 0);  // HID Space, no mods
-            } else {
-                if (primary_wake_swallowed) primary_wake_swallowed = false;
-                else                        ble_keyboard_release();
-            }
-            primary_was = primary_now;
-        }
+        if (primary_now && !primary_was)
+            if (!idle_consume_wake_press()) dispatch_action(controls_get(BTN_SLOT_PRIMARY));
+        primary_was = primary_now;
 
         if (board_caps().button_count >= 2) {
             static bool secondary_was = false;
-            static bool secondary_wake_swallowed = false;
             bool secondary_now = input_hal_is_held(INPUT_BTN_SECONDARY);
-            if (secondary_now != secondary_was) {
-                if (secondary_now) {
-                    if (idle_consume_wake_press()) secondary_wake_swallowed = true;
-                    else                            ble_keyboard_press(0x2B, 0x02);  // HID Tab + LEFT_SHIFT
-                } else {
-                    if (secondary_wake_swallowed) secondary_wake_swallowed = false;
-                    else                          ble_keyboard_release();
-                }
-                secondary_was = secondary_now;
-            }
+            if (secondary_now && !secondary_was)
+                if (!idle_consume_wake_press()) dispatch_action(controls_get(BTN_SLOT_SECONDARY));
+            secondary_was = secondary_now;
         }
 
-        if (power_hal_pwr_pressed()) {
-            if (!idle_consume_wake_press()) {
-                if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-                else                                          ui_cycle_screen();
-            }
-        }
+        if (power_hal_pwr_pressed())
+            if (!idle_consume_wake_press()) dispatch_action(controls_get(BTN_SLOT_PWR_SHORT));
+        if (power_hal_pwr_long_pressed())
+            if (!idle_consume_wake_press()) dispatch_action(controls_get(BTN_SLOT_PWR_LONG));
     }
 
     ble_state_t bs = ble_get_state();

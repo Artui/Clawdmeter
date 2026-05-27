@@ -171,8 +171,12 @@ static const char* const BUDDY_MOOD_EYE[] = {
 // Blink frame uses a closed eye regardless of mood.
 #define BUDDY_BLINK_EYE "-"
 
-// Stat row labels, in BuddyState.stats[] order.
+// Stat row labels, in BuddyState.stats[] order. Short for the combined view,
+// full names for the dedicated stats-only sub-view.
 static const char* const BUDDY_STAT_LABELS[] = {
   "DBG", "PAT", "CHA", "WIS", "SNK",
+};
+static const char* const BUDDY_STAT_FULL[] = {
+  "DEBUGGING", "PATIENCE", "CHAOS", "WISDOM", "SNARK",
 };
 #define BUDDY_STAT_COUNT 5

@@ -130,28 +130,54 @@ View logs: `journalctl --user -u claude-usage-daemon -f`
 
 ## Physical buttons
 
-The board has three side buttons. Left and right do the same thing on every screen; the middle button is screen-aware.
+Buttons drive the on-device UI. Each button's action is **configurable** and
+persisted on the device (see "Configuring buttons" below); the default
+**navigation** layout is:
 
-| Button           | GPIO         | Function                                                          |
-| ---------------- | ------------ | ----------------------------------------------------------------- |
-| **Left**         | GPIO 0       | Hold to send Space (Claude Code voice-mode push-to-talk)          |
-| **Middle** (PWR) | AXP2101 PKEY | Cycle *within* the current mode: Usage ↔ Bluetooth, or next art   |
-| **Right**        | GPIO 18      | Press to send Shift+Tab (Claude Code mode toggle)                 |
+| Button           | GPIO / source | Default action                                                  |
+| ---------------- | ------------- | --------------------------------------------------------------- |
+| **Left**         | GPIO 0 (BOOT) | Previous top-level screen (forward-only on 1-button boards)     |
+| **Right**        | GPIO 18       | Next top-level screen *(boards with a second button)*           |
+| **Middle** (PWR) | AXP2101 PKEY  | Short press: cycle *within* screen · Long press: sleep (screen off) |
 
-Navigation is two-level: **touch** the screen to switch top-level mode — **Data → Splash → Buddy → Data** — and **PWR** cycles within the current mode (Usage ↔ Bluetooth on Data, next animation on Splash).
+Top-level screens cycle **Data ↔ Splash ↔ Buddy**. "Cycle within" means: Data →
+Usage↔Bluetooth, Splash → next animation, Buddy → next sub-view (Full → Creature
+→ Stats). **Touch** the screen also cycles the top-level screen (the only
+top-level control on the single-button 1.8 board). A long PWR press sleeps the
+panel; any button wakes it.
 
-Space and Shift+Tab go out as standard BLE HID keyboard reports, so they trigger in whatever window has focus on the paired host — not just Claude Code.
+### Configuring buttons
+
+Assignable actions: `none`, `screen-next`, `screen-prev`, `cycle-within`,
+`sleep`. Slots: `primary` (left/BOOT), `secondary` (right), `pwr-short`,
+`pwr-long`. Over the serial console (or the `make` wrappers):
+
+```
+buttons                          # show the current map
+buttons preset navigation        # reset to the default layout
+buttons primary screen-next      # assign one slot
+```
+```
+make buttons-show
+make buttons-preset PRESET=navigation
+make buttons-set SLOT=pwr-long ACTION=sleep
+```
+
+> The device is **not** a HID keyboard. It no longer sends Space / Shift+Tab and
+> won't appear in the macOS Bluetooth GUI — the host daemon finds it by name.
 
 ## BLE protocol
 
-The device advertises a custom GATT service alongside the standard HID keyboard service:
+The device advertises a single custom GATT service (it is no longer a HID
+keyboard, so there's no `0x1812` service and it doesn't show in the macOS
+Bluetooth GUI — the daemon discovers it by name via active scan):
 
 |                            | UUID                                   |
 | -------------------------- | -------------------------------------- |
 | **Data Service**           | `4c41555a-4465-7669-6365-000000000001` |
 | RX Characteristic (write)  | `4c41555a-4465-7669-6365-000000000002` |
 | TX Characteristic (notify) | `4c41555a-4465-7669-6365-000000000003` |
-| **HID Service**            | `00001812-0000-1000-8000-00805f9b34fb` |
+| REQ Characteristic (notify)| `4c41555a-4465-7669-6365-000000000004` |
 
 JSON payload format (written to RX):
 
@@ -163,6 +189,8 @@ JSON payload format (written to RX):
 Fields: `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag.
 
 The optional `b` block describes the Claude Buddy companion (the daemon derives it; the device just renders it): `sp` = species index, `ra` = rarity (0–4), `lv` = level, `mo` = mood index, `ht` = hat index, `nm` = name, `st` = the five stats (Debugging, Patience, Chaos, Wisdom, Snark). The whole payload stays well under the BLE ATT MTU.
+
+> **Note:** the first time you flash firmware that changes the GATT layout (e.g. the HID-removal change), macOS may log a one-time `Refresh subscription unavailable … "The handle is invalid"` from its stale CoreBluetooth GATT cache. It's harmless — usage/buddy data still flows; only the device-initiated refresh notify is skipped until the cache refreshes (toggling Bluetooth clears it).
 
 ## Recompiling fonts
 

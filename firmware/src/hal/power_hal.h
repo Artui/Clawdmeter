@@ -17,3 +17,7 @@ bool power_hal_is_vbus_in(void);   // USB cable present (true even without a bat
 
 // Edge-triggered: returns true once per PWR short-press, then clears.
 bool power_hal_pwr_pressed(void);
+
+// Edge-triggered: returns true once per PWR long-press (~700 ms), then clears.
+// Used for manual sleep. A long-press does NOT also fire the short-press edge.
+bool power_hal_pwr_long_pressed(void);
